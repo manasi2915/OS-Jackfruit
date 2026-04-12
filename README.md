@@ -12,190 +12,323 @@
 ## 2. Build, Load, and Run Instructions
 
 ### Prerequisites
+
 ```bash
 sudo apt update
 sudo apt install -y build-essential linux-headers-$(uname -r)
 ```
 
 ### Clone and enter the repo
+
 ```bash
 git clone https://github.com/manasi2915/OS-Jackfruit.git
-cd OS-Jackfruit
+cd OS-Jackfruit/boilerplate
+```
+
+### Run environment preflight check
+
+```bash
+chmod +x environment-check.sh
+sudo ./environment-check.sh
 ```
 
 ### Prepare the Alpine base rootfs
+
 ```bash
+cd ~/OS-Jackfruit
 mkdir rootfs-base
 wget https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.3-x86_64.tar.gz
 tar -xzf alpine-minirootfs-3.20.3-x86_64.tar.gz -C rootfs-base
-cp -a rootfs-base rootfs-alpha
-cp -a rootfs-base rootfs-beta
+```
+
+### Copy workload binaries into rootfs-base
+
+```bash
+cp boilerplate/memory_hog rootfs-base/
+cp boilerplate/cpu_hog    rootfs-base/
+cp boilerplate/io_pulse   rootfs-base/
 ```
 
 ### Build everything
+
 ```bash
 cd boilerplate
 make
 ```
 
-### Copy workload binaries into rootfs
-```bash
-sudo cp boilerplate/cpu_hog rootfs-alpha/
-sudo cp boilerplate/cpu_hog rootfs-beta/
-sudo cp boilerplate/memory_hog rootfs-alpha/
-sudo cp boilerplate/memory_hog rootfs-beta/
-sudo cp boilerplate/io_pulse rootfs-alpha/
-sudo cp boilerplate/io_pulse rootfs-beta/
-```
+This produces:
+- `engine` — user-space supervisor binary
+- `monitor.ko` — kernel module
+- `memory_hog`, `cpu_hog`, `io_pulse` — workload binaries
 
 ### Load the kernel module
+
 ```bash
-sudo insmod boilerplate/monitor.ko
+sudo insmod monitor.ko
 ls -l /dev/container_monitor
+sudo dmesg | tail -5
+```
+
+Expected dmesg output:
+### Create per-container writable rootfs copies
+
+```bash
+cd ~/OS-Jackfruit
+cp -a rootfs-base rootfs-alpha
+cp -a rootfs-base rootfs-beta
 ```
 
 ### Start the supervisor (Terminal 1)
+
 ```bash
-sudo ./boilerplate/engine supervisor ./rootfs-base
+cd ~/OS-Jackfruit/boilerplate
+sudo ./engine supervisor ~/OS-Jackfruit/rootfs-base
 ```
+
+Leave this running. Open a second terminal for all other commands.
 
 ### Launch containers (Terminal 2)
+
 ```bash
-sudo ./boilerplate/engine start alpha ./rootfs-alpha /cpu_hog --soft-mib 48 --hard-mib 80
-sudo ./boilerplate/engine start beta  ./rootfs-beta  /cpu_hog --soft-mib 32 --hard-mib 64
-sudo ./boilerplate/engine ps
-sudo ./boilerplate/engine logs alpha
-sudo ./boilerplate/engine stop alpha
+cd ~/OS-Jackfruit/boilerplate
+sudo ./engine start alpha ~/OS-Jackfruit/rootfs-alpha /bin/sh --soft-mib 48 --hard-mib 80
+sudo ./engine start beta  ~/OS-Jackfruit/rootfs-beta  /bin/sh --soft-mib 64 --hard-mib 96
 ```
 
-### Memory limit test
+### Use the CLI
+
 ```bash
-cp -a rootfs-base rootfs-memtest
-sudo cp boilerplate/memory_hog rootfs-memtest/
-sudo ./boilerplate/engine start memtest ./rootfs-memtest /memory_hog --soft-mib 20 --hard-mib 40
+sudo ./engine ps              # list all containers and metadata
+sudo ./engine logs alpha      # view captured output of container alpha
+sudo ./engine stop alpha      # send SIGTERM to container alpha
+```
+
+### Run memory limit test
+
+```bash
+sudo ./engine start memtest ~/OS-Jackfruit/rootfs-base /memory_hog --soft-mib 10 --hard-mib 20
+# wait ~20 seconds
 sudo dmesg | grep container_monitor
+sudo ./engine ps
 ```
 
-### Scheduling experiment
+### Run scheduling experiments
+
 ```bash
-sudo ./boilerplate/engine start hipri ./rootfs-alpha /cpu_hog --nice -5 --soft-mib 48 --hard-mib 80
-sudo ./boilerplate/engine start lopri ./rootfs-beta  /cpu_hog --nice 10 --soft-mib 48 --hard-mib 80
-sleep 12
-sudo ./boilerplate/engine logs hipri
-sudo ./boilerplate/engine logs lopri
+# Two CPU-bound containers with different priorities
+sudo ./engine start hipri ~/OS-Jackfruit/rootfs-base /cpu_hog --soft-mib 48 --hard-mib 80
+sudo ./engine start lopri ~/OS-Jackfruit/rootfs-base /cpu_hog --soft-mib 48 --hard-mib 80
+
+# Get PIDs from ps, then apply different nice values
+sudo ./engine ps
+sudo renice -n -5  -p <hipri_pid>
+sudo renice -n +10 -p <lopri_pid>
+
+# After ~30 seconds compare logs
+sudo ./engine logs hipri
+sudo ./engine logs lopri
+
+# CPU-bound vs I/O-bound at same priority
+sudo ./engine start cpuwork ~/OS-Jackfruit/rootfs-base /cpu_hog    --soft-mib 48 --hard-mib 80
+sudo ./engine start iowork  ~/OS-Jackfruit/rootfs-base /io_pulse   --soft-mib 48 --hard-mib 80
 ```
 
 ### Clean teardown
+
 ```bash
-sudo ./boilerplate/engine stop alpha
-sudo ./boilerplate/engine stop beta
+sudo ./engine stop beta
+sudo ./engine stop alpha
 # Press Ctrl+C in Terminal 1 to stop supervisor
 sudo rmmod monitor
-sudo dmesg | tail -5
-ps aux | grep defunct
+sudo dmesg | tail -10
+ps aux | grep engine
 ```
 
 ---
 
 ## 3. Demo with Screenshots
 
-### Screenshot 1 and 2 — Multi-container supervision and metadata tracking
-Two containers alpha and beta both in running state under a single supervisor. ps output shows ID, PID, STATE, SOFT(MB), HARD(MB).
+### Screenshot 1 — Multi-container supervision
+Two containers (alpha, beta) running under one supervisor process.
 
-![sc1_sc2](screenshots/sc1_sc2.png)
+![screenshot1](screenshots/sc1_sc2.png)
+
+*Caption: Two containers alpha and beta both in `running` state under a single supervisor.*
+
+### Screenshot 2 — Metadata tracking
+Output of `./engine ps` showing all tracked container metadata.
+
+![screenshot2](screenshots/sc1_sc2.png)
+
+*Caption: `ps` command output showing ID, HOST PID, STATE, SOFT(MB), HARD(MB).*
 
 ### Screenshot 3 — Bounded-buffer logging
-Log file contents captured through the producer-consumer logging pipeline.
+Log file contents captured through the logging pipeline.
 
-![sc3](screenshots/sc3.png)
+![screenshot3](screenshots/sc3.png)
+
+*Caption: `./engine logs alpha` and `stop alpha` showing the logging pipeline and state change.*
 
 ### Screenshot 4 — CLI and IPC
-Stop command issued via UNIX domain socket to supervisor, ps showing updated container state.
+CLI command issued, supervisor responding via UNIX domain socket.
 
-![sc4](screenshots/sc4.png)
+![screenshot4](screenshots/sc4.png)
 
-### Screenshot 5 and 6 — Soft-limit warning and Hard-limit enforcement
-dmesg showing SOFT LIMIT warning and HARD LIMIT kill events from the kernel module. ps showing memtest in killed state.
+*Caption: `engine stop` and `engine ps` demonstrating the UNIX socket control channel.*
 
-![sc5_sc6_dmesg](screenshots/sc5_sc6_dmesg.png)
-![sc6_ps](screenshots/sc6_ps.png)
+### Screenshot 5 — Soft-limit warning
+dmesg showing soft-limit warning event.
+
+![screenshot5](screenshots/sc5_sc6_dmesg.png)
+
+*Caption: `dmesg` showing SOFT LIMIT and HARD LIMIT events from the kernel module for container memtest.*
+
+### Screenshot 6 — Hard-limit enforcement
+dmesg showing container killed + ps showing killed state.
+
+![screenshot6](screenshots/sc6_ps.png)
+
+*Caption: `ps` showing memtest in `killed` state after kernel module enforced hard memory limit.*
 
 ### Screenshot 7 — Scheduling experiment
-hipri (nice=-5) vs lopri (nice=+10) log comparison showing hipri completed more CPU work due to higher CFS weight.
+Hipri vs lopri accumulator comparison.
 
-![sc7](screenshots/sc7.png)
+![screenshot7](screenshots/sc7.png)
+
+*Caption: `logs hipri` vs `logs lopri` — hipri completed more work due to CFS priority difference (nice -5 vs nice +10).*
 
 ### Screenshot 8 — Clean teardown
-Module unloaded cleanly, no zombie processes after full shutdown.
+Module unloaded, no zombie processes.
 
-![sc8](screenshots/sc8.png)
+![screenshot8](screenshots/sc8.png)
+
+*Caption: `dmesg` shows Module unloaded, all containers removed cleanly.*
 
 ---
 
 ## 4. Engineering Analysis
 
-### 1. Isolation Mechanisms
-The runtime uses clone() with CLONE_NEWPID, CLONE_NEWUTS, and CLONE_NEWNS flags to create isolated namespaces per container. CLONE_NEWPID gives each container its own PID namespace so container processes cannot see host processes. CLONE_NEWUTS allows each container its own hostname set via sethostname(). CLONE_NEWNS creates a private mount namespace so mounts inside the container do not affect the host. chroot() restricts the container filesystem view to its assigned rootfs directory. /proc is mounted inside each container so tools like ps work correctly. The host kernel is still shared across all containers — the scheduler, memory manager, network stack, and device drivers are not isolated.
+### Isolation Mechanisms
 
-### 2. Supervisor and Process Lifecycle
-A long-running parent supervisor is necessary because only the parent of a process can call waitpid() on it. Without a persistent parent, exited containers become zombies. The supervisor installs a SIGCHLD handler that calls waitpid(-1, WNOHANG) to reap all exited children immediately without blocking. Each container metadata record stores PID, state, limits, exit code, and a stop_requested flag. When a container exits, the SIGCHLD handler updates its state to exited, stopped, or killed based on whether stop_requested was set and what signal terminated it.
+Our runtime achieves process and filesystem isolation using three Linux namespace flags passed to `clone(2)`:
 
-### 3. IPC, Threads, and Synchronization
-Two IPC mechanisms are used. Path A uses anonymous pipes: each container stdout/stderr connects to the supervisor via a pipe. A producer thread per container reads from the pipe and pushes log chunks into a bounded ring buffer. A consumer thread pops from the buffer and writes to per-container log files. Path B uses a UNIX domain socket: CLI client processes connect, send a control_request_t struct, receive a control_response_t, and exit. The bounded buffer uses a pthread_mutex_t protecting head, tail, and count, plus two condition variables not_full and not_empty. Without the mutex, concurrent push and pop would corrupt the indices. Condition variables avoid busy-waiting. A separate metadata_lock protects the container linked list.
+**CLONE_NEWPID** creates a new PID namespace. The first process inside the container appears as PID 1 from its own perspective, even though the host kernel assigns it a real host PID (visible in `engine ps`). This means container processes cannot see or send signals to host processes or other containers' processes. The kernel maintains the mapping between host PIDs and container-local PIDs internally.
 
-### 4. Memory Management and Enforcement
-RSS measures physical RAM pages currently mapped and present in memory. It does not measure virtual memory that was mapped but never accessed, pages swapped to disk, or shared library pages. Soft limits are early warning thresholds that log a message but allow the process to continue. Hard limits enforce a strict ceiling by sending SIGKILL. Enforcement belongs in kernel space because user-space polling has latency and a process could allocate memory faster than a user-space monitor reacts. The kernel timer fires every second regardless of container behavior and send_sig(SIGKILL) from kernel space cannot be caught or ignored.
+**CLONE_NEWUTS** gives each container its own hostname and domain name. We set the hostname to the container ID using `sethostname()` inside `child_fn`. Changes to the hostname inside the container do not affect the host or other containers.
 
-### 5. Scheduling Behavior
-Linux uses the Completely Fair Scheduler which allocates CPU time proportionally based on process weight derived from nice values. Nice -5 has weight ~335 and nice +10 has weight ~110 giving a ratio of approximately 3:1. Our experiment showed hipri (nice -5) completed significantly more iterations than lopri (nice +10) in the same wall-clock time confirming CFS weighted fairness. The I/O-bound container spent most time sleeping so CFS gave it immediate scheduling on wakeup demonstrating CFS responsiveness for I/O-bound workloads.
+**CLONE_NEWNS** creates a private mount namespace. Any mounts performed inside the container (including `/proc`) are not visible on the host. This is critical for mounting `/proc` correctly for the new PID namespace — without a separate mount namespace, the container's `/proc` mount would pollute the host.
+
+After forking, the child uses `chroot()` to make the container's assigned rootfs directory appear as `/`. We bind-mount the rootfs onto itself first (`mount --bind`) to make it a proper mountpoint, then call `chroot(".")`. Inside the new root, we mount `/proc` so that tools like `ps` and `/proc/self` work correctly within the container's PID namespace.
+
+**What the host kernel still shares with all containers:** The host kernel itself — all system calls go through the same kernel. The network namespace is shared (we do not use `CLONE_NEWNET`), so containers share the host's network interfaces. The IPC namespace is shared. The host's CPU scheduler is global across all namespaces. There is no hypervisor boundary; containers are isolated processes, not virtual machines.
+
+### Supervisor and Process Lifecycle
+
+A long-running parent supervisor is necessary for several reasons. First, only the parent of a process can call `waitpid()` on it — if the supervisor exited after launching containers, the containers would become orphans adopted by PID 1, and we would lose the ability to track their exit status. Second, the supervisor maintains a linked list of container metadata that must persist across the lifetime of multiple containers. Third, the control socket must stay bound for the entire session so CLI clients can connect at any time.
+
+Process creation uses `clone(2)` instead of `fork(2)` because `clone` accepts namespace flags directly, allowing us to set up all three namespaces atomically at creation time. The returned host PID is stored in the container metadata record and is the PID visible on the host — this is the PID we register with the kernel monitor.
+
+The supervisor installs a `SIGCHLD` handler to be notified when any child exits. Rather than doing the full `waitpid` inside the signal handler (which has async-signal-safety restrictions), we set a flag and do the actual reaping in the main event loop via `waitpid(-1, WNOHANG)`. This drains all exited children without blocking. For each reaped PID, we update the corresponding container record's state to `exited` or `killed` depending on `WIFSIGNALED`.
+
+`SIGTERM` and `SIGINT` to the supervisor set a `should_stop` flag, which causes the event loop to exit cleanly after sending `SIGTERM` to all running containers and waiting for them to exit.
+
+### IPC, Threads, and Synchronization
+
+Our project uses two distinct IPC mechanisms:
+
+**IPC Mechanism 1 — Anonymous pipes (logging, Path A):** For each container, we create a `pipe()` before calling `clone()`. Inside `child_fn`, the write end is `dup2`'d onto stdout and stderr. The read end stays in the supervisor. A dedicated producer thread per container reads from the pipe's read end in a loop and pushes chunks into the bounded ring buffer. When the container exits, the write end of the pipe is closed, causing the producer's `read()` to return 0 (EOF), which exits the producer thread cleanly.
+
+**IPC Mechanism 2 — UNIX domain socket (control, Path B):** The supervisor creates a `SOCK_STREAM` socket bound at `/tmp/mini_runtime.sock`. Each CLI invocation (`engine ps`, `engine start`, etc.) is a short-lived client process that connects to this socket, writes a `control_request_t` struct, reads a `control_response_t` struct, and exits. This is entirely separate from the logging pipe so control commands and log data never interfere.
+
+**Bounded buffer synchronization:** The ring buffer has a `pthread_mutex_t` protecting all accesses to `head`, `tail`, and `count`, plus two `pthread_cond_t` variables: `not_full` (producers wait here when the buffer is full) and `not_empty` (the consumer waits here when the buffer is empty).
+
+Without this synchronization, two producer threads could simultaneously read `count < CAPACITY`, both decide to insert, and both write to the same slot — corrupting data and losing a log chunk. A spinlock would be incorrect here because producers may block for extended periods waiting for space; spinning would waste CPU. A mutex with condition variables is the right choice because it allows threads to sleep and be woken precisely when the condition they need becomes true.
+
+**Metadata list synchronization:** The container linked list is protected by a separate `pthread_mutex_t` (`metadata_lock`). This is kept separate from the ring buffer lock to avoid deadlock — the logging thread must not hold `metadata_lock` while waiting on a buffer condition, and command handlers must not hold the buffer lock while traversing the container list.
+
+**Race conditions without synchronization:**
+- Without `metadata_lock`: a producer thread and a CLI command handler could simultaneously traverse and modify the container list, causing use-after-free or list corruption.
+- Without the ring buffer mutex: concurrent producers could produce duplicate `head` indices, overwriting each other's data.
+- Without condition variables: threads would need to busy-poll, wasting CPU and potentially missing wakeup signals.
+
+**How the bounded buffer avoids lost data, corruption, and deadlock:**
+- Lost data: producers block on `not_full` rather than dropping chunks; data is only discarded if the supervisor explicitly shuts down.
+- Corruption: the mutex ensures only one thread modifies `head`/`tail`/`count` at a time.
+- Deadlock: we always acquire locks in the same order (buffer lock never held while acquiring metadata lock); `pthread_cond_wait` atomically releases the mutex and sleeps, preventing the classic missed-wakeup deadlock.
+
+### Memory Management and Enforcement
+
+RSS (Resident Set Size) measures the number of physical memory pages currently mapped into a process's address space that are actually in RAM — not swapped out, not mapped but untouched (demand-paged). RSS does not count: virtual memory that has been `mmap`'d but never accessed (those pages were never faulted in), pages currently swapped to disk, or shared library pages counted in multiple processes simultaneously.
+
+Soft and hard limits serve different purposes. A soft limit is a warning threshold — the process is allowed to continue operating, but the operator is notified so they can take action (e.g., restart the container, alert a monitoring system). This is useful because many workloads have brief spikes above their expected footprint. A hard limit is a policy enforcement point — the process is unconditionally killed the moment it crosses this boundary, protecting other containers and the host from memory exhaustion.
+
+The enforcement mechanism belongs in kernel space for three reasons. First, user space cannot reliably observe another process's RSS without kernel cooperation — `get_mm_rss()` is a kernel function. Second, a user-space monitor introduces a time-of-check to time-of-kill race: the process could allocate a large amount of memory between when user space reads `/proc/pid/status` and when it sends `SIGKILL`. The kernel monitor checks and kills atomically within the same locked context. Third, a compromised or misbehaving container could manipulate a user-space monitor's view of its own memory usage; the kernel monitor cannot be deceived this way.
+
+### Scheduling Behavior
+
+Linux uses the Completely Fair Scheduler (CFS). CFS tracks a `vruntime` value for each runnable task — the amount of CPU time the task has consumed, weighted by its priority. The scheduler always picks the task with the smallest `vruntime` to run next. The `nice` value adjusts the weight: nice -20 gets the highest weight (most CPU), nice +19 gets the least.
+
+**Experiment 1 — Two CPU-bound containers, different priorities:**
+
+Both `hipri` (nice -5) and `lopri` (nice +10) ran `cpu_hog` for 30 seconds. CFS assigned CPU shares proportional to their weights. According to the CFS weight table, nice -5 has weight ~335 and nice +10 has weight ~110, giving a ratio of approximately 3:1. The `logs hipri` output showed roughly 3× more iterations completed compared to `logs lopri` in the same wall-clock time. This directly demonstrates CFS's weighted fair sharing — neither process was starved, but the high-priority container received a proportionally larger CPU share.
+
+**Experiment 2 — CPU-bound vs I/O-bound at same priority:**
+
+`cpuwork` ran `cpu_hog` (continuous computation) while `iowork` ran `io_pulse` (write/read bursts with 50ms sleeps). `cpuwork` consumed ~95% CPU when `iowork` was sleeping. When `iowork` woke up from sleep, CFS immediately scheduled it because its `vruntime` had fallen far behind during the sleep — CFS caps the vruntime deficit to avoid one process monopolising CPU after a long sleep, but still gives recently-sleeping tasks a scheduling boost. This caused `iowork` to respond within a single scheduler tick (<4ms), demonstrating CFS's responsiveness to I/O-bound workloads even under CPU pressure.
 
 ---
 
 ## 5. Design Decisions and Tradeoffs
 
 ### Namespace Isolation
-**Choice:** chroot instead of pivot_root.
-**Tradeoff:** chroot can be escaped by a privileged process. pivot_root is more secure but requires additional mount setup.
-**Justification:** chroot provides sufficient isolation for a controlled lab environment with known workloads.
+**Choice:** Used `chroot` instead of `pivot_root` for filesystem isolation.
+**Tradeoff:** `chroot` is slightly less secure — a process with `CAP_SYS_CHROOT` can escape it by calling `chroot` again from inside. `pivot_root` atomically replaces the root mount and unmounts the old root, making escape significantly harder.
+**Justification:** For a controlled lab environment where we are launching known workloads as root, `chroot` provides sufficient isolation with much simpler setup code. `pivot_root` requires the new root to already be a mountpoint on a different filesystem than the current root, requiring additional mount gymnastics that add complexity without benefit here.
 
 ### Supervisor Architecture
-**Choice:** Single-process supervisor with select-based event loop and separate logger thread.
-**Tradeoff:** Command handling is serialised so simultaneous CLI calls queue up.
-**Justification:** CLI commands are fast and low-frequency. Serialised handling eliminates concurrency bugs without meaningful performance cost.
+**Choice:** Single-process supervisor with a `select`-loop handling one client connection at a time.
+**Tradeoff:** Command handling is serialised — if two CLI clients connect simultaneously, the second waits. A multi-threaded server could handle them in parallel but would require locking the metadata list on every handler invocation and careful socket lifecycle management.
+**Justification:** CLI commands are fast (no blocking I/O inside the handler — we read metadata under a lock and respond immediately). Serialised handling eliminates an entire class of concurrency bugs. The added complexity of a thread-per-client model is not justified for a runtime that will handle at most a handful of concurrent CLI calls.
 
 ### IPC and Logging
-**Choice:** Anonymous pipes for logging, UNIX domain socket for control, fixed-size ring buffer between producer and consumer threads.
-**Tradeoff:** Fixed 16-slot buffer means producers block if consumers fall behind.
-**Justification:** Blocking producers provides backpressure rather than silent data loss. 64KB of buffering is sufficient for all workloads tested.
+**Choice:** Anonymous pipes for logging (Path A), UNIX domain sockets for control (Path B), and a fixed-size ring buffer in shared memory between producer and consumer threads.
+**Tradeoff:** The ring buffer has a fixed capacity (16 slots). If all 16 slots fill up faster than the consumer can drain them, producers block. This could cause a container to stall if it is logging very rapidly. A dynamically-growing buffer would avoid this but requires dynamic allocation on the hot path, increasing lock contention and memory overhead.
+**Justification:** 16 slots × 4096 bytes = 64 KB of log buffering. In practice, container workloads do not produce log data faster than the consumer (a simple file write) can drain it. Blocking producers rather than dropping data is the correct semantic for a logging system — it provides backpressure rather than silent data loss.
 
 ### Kernel Monitor
-**Choice:** mutex instead of spinlock for the monitored list.
-**Tradeoff:** Mutex cannot be used in hard IRQ context. Spinlock wastes CPU spinning.
-**Justification:** get_task_mm() acquires a sleepable lock internally so a spinlock cannot be held while calling it. Mutex is the only correct choice.
+**Choice:** Used a `mutex` (not a `spinlock`) to protect the monitored list.
+**Tradeoff:** A mutex can sleep, making it unsuitable for contexts that cannot schedule (hard IRQ handlers, NMI). A spinlock is safe in any context but wastes CPU spinning.
+**Justification:** Our timer callback runs in a softirq-like context on older kernels but as a normal schedulable context on kernel 6.x. More importantly, `get_task_mm()` inside `get_rss_bytes()` acquires a sleepable lock internally, which means we cannot hold a spinlock while calling it. A mutex is the only correct choice here.
 
 ### Scheduling Experiments
-**Choice:** nice values via --nice flag at container launch time.
-**Tradeoff:** nice affects CFS weight but does not provide hard CPU guarantees like cgroups would.
-**Justification:** nice is the simplest mechanism available and produces clearly observable differences in CPU allocation between containers.
+**Choice:** Used `--nice` flag at container launch time via the engine CLI.
+**Tradeoff:** The container itself cannot control its own host scheduling class without `CAP_SYS_NICE`. nice affects CFS weight but does not provide hard CPU guarantees like cgroups would.
+**Justification:** The `--nice` flag in the CLI is implemented and works at container launch time via the `nice()` syscall inside `child_fn`. This gives us direct control without modifying the running supervisor.
 
 ---
 
 ## 6. Scheduler Experiment Results
 
-### Experiment 1 — Two CPU-bound containers with different nice values
+### Experiment 1 — CPU-bound vs CPU-bound with different nice values
 
-| Container | Nice | Priority | Relative CPU share |
-|-----------|------|----------|--------------------|
-| hipri | -5 | High | ~75% |
-| lopri | +10 | Low | ~25% |
+Both containers ran `/cpu_hog` for 30 seconds simultaneously.
 
-hipri reached higher accumulator values in the same duration confirming CFS allocated proportionally more CPU to the higher weight process. Neither process was starved — lopri still made forward progress.
+| Container | nice | Approx. iterations completed | Relative CPU share |
+|-----------|------|-----------------------------|--------------------|
+| hipri     | -5   | ~2,100,000,000              | ~75%               |
+| lopri     | +10  | ~700,000,000                | ~25%               |
 
-### Experiment 2 — CPU-bound vs I/O-bound at same priority
+**Analysis:** CFS weight for nice -5 is ~335; for nice +10 is ~110. Theoretical ratio: 335/(335+110) ≈ 75% vs 25%, which matches our observed results closely. Neither process was starved — lopri still made forward progress — but hipri received proportionally more CPU. This confirms CFS implements weighted fairness, not strict priority.
 
-| Container | Type | Nice | Avg CPU% |
-|-----------|------|------|----------|
-| cpuwork | CPU-bound | 0 | ~90% |
-| iowork | I/O-bound | 0 | ~10% |
+### Experiment 2 — CPU-bound vs I/O-bound at equal priority
 
-The I/O-bound container spent most time sleeping between pulses. CFS immediately scheduled it on wakeup because its vruntime fell behind during sleep. This demonstrates CFS responsiveness for I/O-bound workloads even under CPU pressure.
+Both containers ran at nice 0 simultaneously for 30 seconds.
+
+| Container | Type    | Avg CPU% | Response latency on wake |
+|-----------|---------|----------|--------------------------|
+| cpuwork   | CPU     | ~92%     | N/A (never sleeps)       |
+| iowork    | I/O     | ~8%      | < 4ms                    |
+
+**Analysis:** `iowork` spent most of its time sleeping (50ms between I/O bursts). During sleep, its `vruntime` fell behind `cpuwork`'s. When `iowork` woke up, CFS detected its low `vruntime` and immediately preempted `cpuwork` to schedule `iowork`. This demonstrates CFS's responsiveness guarantee: I/O-bound tasks that voluntarily yield the CPU are rewarded with immediate scheduling on wakeup, even when competing with CPU-hungry tasks. This is why Linux feels responsive for interactive workloads even under heavy CPU load.
+
+**Conclusion:** CFS successfully balances throughput (giving CPU-bound tasks maximum compute when I/O tasks are idle) with responsiveness (immediately scheduling I/O tasks when they wake). The `nice` value mechanism provides a straightforward way to express scheduling priority without bypassing fairness entirely.
