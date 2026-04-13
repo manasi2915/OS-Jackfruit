@@ -69,7 +69,6 @@ ls -l /dev/container_monitor
 sudo dmesg | tail -5
 ```
 
-Expected dmesg output:
 ### Create per-container writable rootfs copies
 
 ```bash
@@ -129,8 +128,8 @@ sudo ./engine logs hipri
 sudo ./engine logs lopri
 
 # CPU-bound vs I/O-bound at same priority
-sudo ./engine start cpuwork ~/OS-Jackfruit/rootfs-base /cpu_hog    --soft-mib 48 --hard-mib 80
-sudo ./engine start iowork  ~/OS-Jackfruit/rootfs-base /io_pulse   --soft-mib 48 --hard-mib 80
+sudo ./engine start cpuwork ~/OS-Jackfruit/rootfs-base /cpu_hog  --soft-mib 48 --hard-mib 80
+sudo ./engine start iowork  ~/OS-Jackfruit/rootfs-base /io_pulse --soft-mib 48 --hard-mib 80
 ```
 
 ### Clean teardown
@@ -151,56 +150,56 @@ ps aux | grep engine
 ### Screenshot 1 — Multi-container supervision
 Two containers (alpha, beta) running under one supervisor process.
 
-![screenshot1](screenshots/sc1_sc2.png)
+![screenshot1](screenshots/1_multi_container.png)
 
 *Caption: Two containers alpha and beta both in `running` state under a single supervisor.*
 
 ### Screenshot 2 — Metadata tracking
 Output of `./engine ps` showing all tracked container metadata.
 
-![screenshot2](screenshots/sc1_sc2.png)
+![screenshot2](screenshots/2_ps_metadata.png)
 
 *Caption: `ps` command output showing ID, HOST PID, STATE, SOFT(MB), HARD(MB).*
 
 ### Screenshot 3 — Bounded-buffer logging
 Log file contents captured through the logging pipeline.
 
-![screenshot3](screenshots/sc3.png)
+![screenshot3](screenshots/3_logging.png)
 
 *Caption: `./engine logs alpha` and `stop alpha` showing the logging pipeline and state change.*
 
 ### Screenshot 4 — CLI and IPC
 CLI command issued, supervisor responding via UNIX domain socket.
 
-![screenshot4](screenshots/sc4.png)
+![screenshot4](screenshots/4_cli_ipc.png)
 
 *Caption: `engine stop` and `engine ps` demonstrating the UNIX socket control channel.*
 
 ### Screenshot 5 — Soft-limit warning
 dmesg showing soft-limit warning event.
 
-![screenshot5](screenshots/sc5_sc6_dmesg.png)
+![screenshot5](screenshots/5_soft_limit.png)
 
-*Caption: `dmesg` showing SOFT LIMIT and HARD LIMIT events from the kernel module for container memtest.*
+*Caption: `dmesg` showing SOFT LIMIT event from the kernel module for container memtest.*
 
 ### Screenshot 6 — Hard-limit enforcement
 dmesg showing container killed + ps showing killed state.
 
-![screenshot6](screenshots/sc6_ps.png)
+![screenshot6](screenshots/6_hard_limit.png)
 
 *Caption: `ps` showing memtest in `killed` state after kernel module enforced hard memory limit.*
 
 ### Screenshot 7 — Scheduling experiment
 Hipri vs lopri accumulator comparison.
 
-![screenshot7](screenshots/sc7.png)
+![screenshot7](screenshots/7_scheduling.png)
 
 *Caption: `logs hipri` vs `logs lopri` — hipri completed more work due to CFS priority difference (nice -5 vs nice +10).*
 
 ### Screenshot 8 — Clean teardown
 Module unloaded, no zombie processes.
 
-![screenshot8](screenshots/sc8.png)
+![screenshot8](screenshots/8_clean_teardown.png)
 
 *Caption: `dmesg` shows Module unloaded, all containers removed cleanly.*
 
@@ -281,28 +280,28 @@ Both `hipri` (nice -5) and `lopri` (nice +10) ran `cpu_hog` for 30 seconds. CFS 
 ## 5. Design Decisions and Tradeoffs
 
 ### Namespace Isolation
-**Choice:** Used `chroot` instead of `pivot_root` for filesystem isolation.
-**Tradeoff:** `chroot` is slightly less secure — a process with `CAP_SYS_CHROOT` can escape it by calling `chroot` again from inside. `pivot_root` atomically replaces the root mount and unmounts the old root, making escape significantly harder.
+**Choice:** Used `chroot` instead of `pivot_root` for filesystem isolation.  
+**Tradeoff:** `chroot` is slightly less secure — a process with `CAP_SYS_CHROOT` can escape it by calling `chroot` again from inside. `pivot_root` atomically replaces the root mount and unmounts the old root, making escape significantly harder.  
 **Justification:** For a controlled lab environment where we are launching known workloads as root, `chroot` provides sufficient isolation with much simpler setup code. `pivot_root` requires the new root to already be a mountpoint on a different filesystem than the current root, requiring additional mount gymnastics that add complexity without benefit here.
 
 ### Supervisor Architecture
-**Choice:** Single-process supervisor with a `select`-loop handling one client connection at a time.
-**Tradeoff:** Command handling is serialised — if two CLI clients connect simultaneously, the second waits. A multi-threaded server could handle them in parallel but would require locking the metadata list on every handler invocation and careful socket lifecycle management.
+**Choice:** Single-process supervisor with a `select`-loop handling one client connection at a time.  
+**Tradeoff:** Command handling is serialised — if two CLI clients connect simultaneously, the second waits. A multi-threaded server could handle them in parallel but would require locking the metadata list on every handler invocation and careful socket lifecycle management.  
 **Justification:** CLI commands are fast (no blocking I/O inside the handler — we read metadata under a lock and respond immediately). Serialised handling eliminates an entire class of concurrency bugs. The added complexity of a thread-per-client model is not justified for a runtime that will handle at most a handful of concurrent CLI calls.
 
 ### IPC and Logging
-**Choice:** Anonymous pipes for logging (Path A), UNIX domain sockets for control (Path B), and a fixed-size ring buffer in shared memory between producer and consumer threads.
-**Tradeoff:** The ring buffer has a fixed capacity (16 slots). If all 16 slots fill up faster than the consumer can drain them, producers block. This could cause a container to stall if it is logging very rapidly. A dynamically-growing buffer would avoid this but requires dynamic allocation on the hot path, increasing lock contention and memory overhead.
+**Choice:** Anonymous pipes for logging (Path A), UNIX domain sockets for control (Path B), and a fixed-size ring buffer between producer and consumer threads.  
+**Tradeoff:** The ring buffer has a fixed capacity (16 slots). If all 16 slots fill up faster than the consumer can drain them, producers block. This could cause a container to stall if it is logging very rapidly. A dynamically-growing buffer would avoid this but requires dynamic allocation on the hot path, increasing lock contention and memory overhead.  
 **Justification:** 16 slots × 4096 bytes = 64 KB of log buffering. In practice, container workloads do not produce log data faster than the consumer (a simple file write) can drain it. Blocking producers rather than dropping data is the correct semantic for a logging system — it provides backpressure rather than silent data loss.
 
 ### Kernel Monitor
-**Choice:** Used a `mutex` (not a `spinlock`) to protect the monitored list.
-**Tradeoff:** A mutex can sleep, making it unsuitable for contexts that cannot schedule (hard IRQ handlers, NMI). A spinlock is safe in any context but wastes CPU spinning.
+**Choice:** Used a `mutex` (not a `spinlock`) to protect the monitored list.  
+**Tradeoff:** A mutex can sleep, making it unsuitable for contexts that cannot schedule (hard IRQ handlers, NMI). A spinlock is safe in any context but wastes CPU spinning.  
 **Justification:** Our timer callback runs in a softirq-like context on older kernels but as a normal schedulable context on kernel 6.x. More importantly, `get_task_mm()` inside `get_rss_bytes()` acquires a sleepable lock internally, which means we cannot hold a spinlock while calling it. A mutex is the only correct choice here.
 
 ### Scheduling Experiments
-**Choice:** Used `--nice` flag at container launch time via the engine CLI.
-**Tradeoff:** The container itself cannot control its own host scheduling class without `CAP_SYS_NICE`. nice affects CFS weight but does not provide hard CPU guarantees like cgroups would.
+**Choice:** Used `--nice` flag at container launch time via the engine CLI.  
+**Tradeoff:** The container itself cannot control its own host scheduling class without `CAP_SYS_NICE`. nice affects CFS weight but does not provide hard CPU guarantees like cgroups would.  
 **Justification:** The `--nice` flag in the CLI is implemented and works at container launch time via the `nice()` syscall inside `child_fn`. This gives us direct control without modifying the running supervisor.
 
 ---
