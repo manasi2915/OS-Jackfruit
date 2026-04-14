@@ -149,58 +149,65 @@ ps aux | grep engine
 
 ### Screenshot 1 — Multi-container supervision
 Two containers (alpha, beta) running under one supervisor process.
+![screenshot1](screenshots/1.png)
 
-![screenshot1](screenshots/1_multi_container.png)
+
 
 *Caption: Two containers alpha and beta both in `running` state under a single supervisor.*
 
 ### Screenshot 2 — Metadata tracking
 Output of `./engine ps` showing all tracked container metadata.
 
-![screenshot2](screenshots/2_ps_metadata.png)
+
+![screenshot2](screenshots/2.png)
 
 *Caption: `ps` command output showing ID, HOST PID, STATE, SOFT(MB), HARD(MB).*
 
 ### Screenshot 3 — Bounded-buffer logging
 Log file contents captured through the logging pipeline.
 
-![screenshot3](screenshots/3_logging.png)
+
+![screenshot3](screenshots/3.png)
 
 *Caption: `./engine logs alpha` and `stop alpha` showing the logging pipeline and state change.*
 
 ### Screenshot 4 — CLI and IPC
 CLI command issued, supervisor responding via UNIX domain socket.
 
-![screenshot4](screenshots/4_cli_ipc.png)
 
+![screenshot4](screenshots/4.png)
+![screenshot4](screenshots/4.2.png)
 *Caption: `engine stop` and `engine ps` demonstrating the UNIX socket control channel.*
 
 ### Screenshot 5 — Soft-limit warning
 dmesg showing soft-limit warning event.
 
-![screenshot5](screenshots/5_soft_limit.png)
+
+![screenshot5](screenshots/5.png)
 
 *Caption: `dmesg` showing SOFT LIMIT event from the kernel module for container memtest.*
 
 ### Screenshot 6 — Hard-limit enforcement
 dmesg showing container killed + ps showing killed state.
 
-![screenshot6](screenshots/6_hard_limit.png)
+
+![screenshot6](screenshots/6.png)
 
 *Caption: `ps` showing memtest in `killed` state after kernel module enforced hard memory limit.*
 
 ### Screenshot 7 — Scheduling experiment
 Hipri vs lopri accumulator comparison.
 
-![screenshot7](screenshots/7_scheduling.png)
+
+![screenshot7](screenshots/7.png)
 
 *Caption: `logs hipri` vs `logs lopri` — hipri completed more work due to CFS priority difference (nice -5 vs nice +10).*
 
 ### Screenshot 8 — Clean teardown
 Module unloaded, no zombie processes.
 
-![screenshot8](screenshots/8_clean_teardown.png)
 
+![screenshot8](screenshots/8.png)
 *Caption: `dmesg` shows Module unloaded, all containers removed cleanly.*
 
 ---
